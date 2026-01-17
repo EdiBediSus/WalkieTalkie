@@ -3,13 +3,24 @@
 // Run: node server.js
 
 const WebSocket = require('ws');
-const server = new WebSocket.Server({ port: 8080 });
+const http = require('http');
+
+const PORT = process.env.PORT || 8080;
+
+// Create HTTP server first
+const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Walkie Talkie Signaling Server Running\n');
+});
+
+// Create WebSocket server on top of HTTP server
+const wss = new WebSocket.Server({ server });
 
 const rooms = new Map(); // roomId -> Set of clients
 
-console.log('Walkie Talkie Signaling Server running on port 8080');
+console.log('Walkie Talkie Signaling Server starting on port', PORT);
 
-server.on('connection', (ws) => {
+wss.on('connection', (ws) => {
     let currentRoom = null;
     
     console.log('New client connected');
