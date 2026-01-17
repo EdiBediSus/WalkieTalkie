@@ -189,12 +189,13 @@
         }
 
         .server-info {
-            background: #e3f2fd;
+            background: #e8f5e9;
             padding: 12px;
             border-radius: 8px;
             margin-bottom: 15px;
             font-size: 13px;
-            color: #1976d2;
+            color: #2e7d32;
+            border: 1px solid #a5d6a7;
         }
     </style>
 </head>
@@ -206,8 +207,8 @@
         
         <div class="room-section" id="roomSection">
             <div class="server-info">
-                ✅ <strong>Connected to your server:</strong><br>
-                walkietalkie-rtx3.onrender.com
+                ✅ <strong>Server:</strong> walkietalkie-rtx3.onrender.com<br>
+                <small>First connection may take 30-60 sec (server waking up)</small>
             </div>
             
             <label for="roomId">Room Code:</label>
@@ -229,19 +230,13 @@
             1. Enter the same room code on both devices<br>
             2. Press and hold the button to talk<br>
             3. Release to listen<br>
-            4. Grant microphone permission when asked<br><br>
-            <strong>Tech:</strong> Uses WebSocket for signaling and WebRTC for direct audio
+            4. Grant microphone permission when asked
         </div>
     </div>
 
     <script>
-        // Configuration - Your deployed server on Render
-        const SIGNALING_SERVERS = [
-            'wss://walkietalkie-rtx3.onrender.com',  // Your Render server
-            'wss://socketsbay.com/wss/v2/1/demo/'    // Backup (if your server fails)
-        ];
-        
-        let currentServerIndex = 0;
+        // YOUR RENDER SERVER - DO NOT CHANGE THIS URL
+        const SIGNALING_SERVER = 'wss://walkietalkie-rtx3.onrender.com';
         
         const statusEl = document.getElementById('status');
         const roomSection = document.getElementById('roomSection');
@@ -256,14 +251,15 @@
         let localStream = null;
         let isTalking = false;
         let roomId = '';
-        let audioContext = null;
         let remoteAudio = null;
+        let connectionTimeout = null;
 
-        // WebRTC configuration
+        // WebRTC configuration - Using Google's free STUN servers
         const rtcConfig = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' }
             ]
         };
 
@@ -295,35 +291,33 @@
         }
 
         function connectToSignalingServer() {
-            const serverUrl = SIGNALING_SERVERS[currentServerIndex];
-            console.log(`Trying server ${currentServerIndex + 1}/${SIGNALING_SERVERS.length}: ${serverUrl}`);
+            console.log('Connecting to:', SIGNALING_SERVER);
+            updateStatus('Connecting to server... (may take 30-60s first time)', 'connecting');
             
-            ws = new WebSocket(serverUrl);
+            ws = new WebSocket(SIGNALING_SERVER);
             
-            // Set timeout for connection
-            const timeout = setTimeout(() => {
+            // Set a longer timeout for Render (it needs time to wake up)
+            connectionTimeout = setTimeout(() => {
                 if (ws.readyState !== WebSocket.OPEN) {
-                    console.log('Connection timeout');
-                    ws.close();
-                    tryNextServer();
+                    console.log('Connection timeout - server might be sleeping');
+                    updateStatus('Server waking up, please wait...', 'connecting');
                 }
-            }, 5000);
+            }, 10000);
 
             ws.onopen = () => {
-                clearTimeout(timeout);
-                console.log('Connected to signaling server');
-                currentServerIndex = 0; // Reset for next time
+                clearTimeout(connectionTimeout);
+                console.log('✅ Connected to signaling server');
                 ws.send(JSON.stringify({ type: 'join', room: roomId }));
-                updateStatus('Waiting for peer...', 'connecting');
+                updateStatus('Waiting for peer in room: ' + roomId, 'connecting');
             };
 
             ws.onmessage = async (event) => {
                 const message = JSON.parse(event.data);
-                console.log('Received message:', message.type);
+                console.log('📨 Received:', message.type);
 
                 switch (message.type) {
                     case 'peer-joined':
-                        updateStatus('Peer found! Connecting...', 'connecting');
+                        updateStatus('Peer found! Establishing connection...', 'connecting');
                         await createOffer();
                         break;
                     
@@ -357,37 +351,18 @@
             };
 
             ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-                updateStatus(`Server ${currentServerIndex + 1} failed, trying next...`, 'connecting');
+                clearTimeout(connectionTimeout);
+                console.error('❌ WebSocket error:', error);
+                updateStatus('Connection error - check server status', 'disconnected');
             };
 
             ws.onclose = () => {
-                clearTimeout(timeout);
-                console.log('Disconnected from signaling server');
-                
-                if (ws.readyState === WebSocket.CLOSED && 
-                    (statusEl.classList.contains('connecting') && !statusEl.textContent.includes('peer'))) {
-                    tryNextServer();
-                } else if (statusEl.classList.contains('connected') || statusEl.classList.contains('connecting')) {
+                clearTimeout(connectionTimeout);
+                console.log('🔌 Disconnected from signaling server');
+                if (statusEl.classList.contains('connected') || statusEl.classList.contains('connecting')) {
                     updateStatus('Disconnected', 'disconnected');
                 }
             };
-        }
-
-        function tryNextServer() {
-            currentServerIndex++;
-            
-            if (currentServerIndex >= SIGNALING_SERVERS.length) {
-                updateStatus('All servers failed. Run your own server or try again later.', 'disconnected');
-                leaveRoom();
-                alert('Could not connect to any server.\n\nOptions:\n1. Run the server.js file locally\n2. Try again later\n3. Check your internet connection');
-                return;
-            }
-            
-            // Try next server
-            setTimeout(() => {
-                connectToSignalingServer();
-            }, 1000);
         }
 
         function createPeerConnection() {
@@ -402,7 +377,7 @@
 
             // Handle incoming tracks
             peerConnection.ontrack = (event) => {
-                console.log('Received remote track');
+                console.log('🎵 Received remote audio track');
                 playRemoteStream(event.streams[0]);
             };
 
@@ -419,7 +394,7 @@
 
             // Connection state changes
             peerConnection.onconnectionstatechange = () => {
-                console.log('Connection state:', peerConnection.connectionState);
+                console.log('🔗 Connection state:', peerConnection.connectionState);
                 if (peerConnection.connectionState === 'connected') {
                     updateStatus('Connected - Ready to talk!', 'connected');
                 } else if (peerConnection.connectionState === 'disconnected' || 
@@ -511,7 +486,6 @@
                 return;
             }
 
-            updateStatus('Connecting to server...', 'connecting');
             connectToSignalingServer();
 
             roomSection.style.display = 'none';
@@ -582,6 +556,10 @@
                 remoteAudio = null;
             }
 
+            if (connectionTimeout) {
+                clearTimeout(connectionTimeout);
+            }
+
             roomSection.style.display = 'block';
             talkBtn.classList.remove('show', 'active');
             leaveBtn.classList.remove('show');
@@ -609,6 +587,10 @@
             e.preventDefault();
             stopTalking();
         });
+
+        // Log on page load
+        console.log('🚀 Walkie Talkie App Loaded');
+        console.log('📡 Server:', SIGNALING_SERVER);
     </script>
 </body>
 </html>
