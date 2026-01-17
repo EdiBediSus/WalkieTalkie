@@ -206,11 +206,8 @@
         
         <div class="room-section" id="roomSection">
             <div class="server-info">
-                Using free signaling server:<br>
-                const SIGNALING_SERVERS = [
-                    'wss://walkietalkie-rtx3.onrender.com',  // Your server
-                    
-                ];
+                ✅ <strong>Connected to your server:</strong><br>
+                walkietalkie-rtx3.onrender.com
             </div>
             
             <label for="roomId">Room Code:</label>
@@ -238,8 +235,13 @@
     </div>
 
     <script>
-        // Configuration - You can change this to your own server
-        const SIGNALING_SERVER = 'wss://walkie-talkie-signal.glitch.me';
+        // Configuration - Your deployed server on Render
+        const SIGNALING_SERVERS = [
+            'wss://walkietalkie-rtx3.onrender.com',  // Your Render server
+            'wss://socketsbay.com/wss/v2/1/demo/'    // Backup (if your server fails)
+        ];
+        
+        let currentServerIndex = 0;
         
         const statusEl = document.getElementById('status');
         const roomSection = document.getElementById('roomSection');
@@ -293,10 +295,24 @@
         }
 
         function connectToSignalingServer() {
-            ws = new WebSocket(SIGNALING_SERVER);
+            const serverUrl = SIGNALING_SERVERS[currentServerIndex];
+            console.log(`Trying server ${currentServerIndex + 1}/${SIGNALING_SERVERS.length}: ${serverUrl}`);
+            
+            ws = new WebSocket(serverUrl);
+            
+            // Set timeout for connection
+            const timeout = setTimeout(() => {
+                if (ws.readyState !== WebSocket.OPEN) {
+                    console.log('Connection timeout');
+                    ws.close();
+                    tryNextServer();
+                }
+            }, 5000);
 
             ws.onopen = () => {
+                clearTimeout(timeout);
                 console.log('Connected to signaling server');
+                currentServerIndex = 0; // Reset for next time
                 ws.send(JSON.stringify({ type: 'join', room: roomId }));
                 updateStatus('Waiting for peer...', 'connecting');
             };
@@ -342,15 +358,36 @@
 
             ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
-                updateStatus('Connection error', 'disconnected');
+                updateStatus(`Server ${currentServerIndex + 1} failed, trying next...`, 'connecting');
             };
 
             ws.onclose = () => {
+                clearTimeout(timeout);
                 console.log('Disconnected from signaling server');
-                if (statusEl.classList.contains('connected') || statusEl.classList.contains('connecting')) {
+                
+                if (ws.readyState === WebSocket.CLOSED && 
+                    (statusEl.classList.contains('connecting') && !statusEl.textContent.includes('peer'))) {
+                    tryNextServer();
+                } else if (statusEl.classList.contains('connected') || statusEl.classList.contains('connecting')) {
                     updateStatus('Disconnected', 'disconnected');
                 }
             };
+        }
+
+        function tryNextServer() {
+            currentServerIndex++;
+            
+            if (currentServerIndex >= SIGNALING_SERVERS.length) {
+                updateStatus('All servers failed. Run your own server or try again later.', 'disconnected');
+                leaveRoom();
+                alert('Could not connect to any server.\n\nOptions:\n1. Run the server.js file locally\n2. Try again later\n3. Check your internet connection');
+                return;
+            }
+            
+            // Try next server
+            setTimeout(() => {
+                connectToSignalingServer();
+            }, 1000);
         }
 
         function createPeerConnection() {
