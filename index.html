@@ -79,6 +79,7 @@
             border-radius: 8px;
             font-size: 16px;
             transition: border 0.3s;
+            margin-bottom: 10px;
         }
 
         input:focus {
@@ -186,6 +187,15 @@
             color: #e74c3c;
             font-weight: 600;
         }
+
+        .server-info {
+            background: #e3f2fd;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 13px;
+            color: #1976d2;
+        }
     </style>
 </head>
 <body>
@@ -195,8 +205,14 @@
         <div class="status disconnected" id="status">Disconnected</div>
         
         <div class="room-section" id="roomSection">
+            <div class="server-info">
+                Using free signaling server:<br>
+                <strong>wss://walkie-talkie-signal.glitch.me</strong>
+            </div>
+            
             <label for="roomId">Room Code:</label>
             <input type="text" id="roomId" placeholder="Enter room code (e.g., room123)" value="room123">
+            
             <button class="join-btn" id="joinBtn">Join Room</button>
         </div>
 
@@ -213,12 +229,15 @@
             1. Enter the same room code on both devices<br>
             2. Press and hold the button to talk<br>
             3. Release to listen<br>
-            4. Make sure microphone permission is granted
+            4. Grant microphone permission when asked<br><br>
+            <strong>Tech:</strong> Uses WebSocket for signaling and WebRTC for direct audio
         </div>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js"></script>
     <script>
+        // Configuration - You can change this to your own server
+        const SIGNALING_SERVER = 'wss://walkie-talkie-signal.glitch.me';
+        
         const statusEl = document.getElementById('status');
         const roomSection = document.getElementById('roomSection');
         const roomIdInput = document.getElementById('roomId');
@@ -227,13 +246,21 @@
         const leaveBtn = document.getElementById('leaveBtn');
         const audioIndicator = document.getElementById('audioIndicator');
 
-        let peer = null;
-        let conn = null;
+        let ws = null;
+        let peerConnection = null;
         let localStream = null;
-        let currentCall = null;
         let isTalking = false;
         let roomId = '';
-        let myPeerId = '';
+        let audioContext = null;
+        let remoteAudio = null;
+
+        // WebRTC configuration
+        const rtcConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
 
         function updateStatus(msg, type) {
             statusEl.textContent = msg;
@@ -246,90 +273,185 @@
                     audio: {
                         echoCancellation: true,
                         noiseSuppression: true,
-                        autoGainControl: true
+                        autoGainControl: true,
+                        sampleRate: 48000
                     }, 
                     video: false 
                 });
+                
+                // Mute initially
+                localStream.getAudioTracks().forEach(track => track.enabled = false);
                 return true;
             } catch (err) {
                 alert('Microphone access denied! Please allow microphone access.');
+                console.error('Mic error:', err);
                 return false;
             }
         }
 
-        function initPeer() {
-            peer = new Peer();
+        function connectToSignalingServer() {
+            ws = new WebSocket(SIGNALING_SERVER);
 
-            peer.on('open', (id) => {
-                myPeerId = id;
-                console.log('My peer ID:', id);
-                connectToRoom();
-            });
+            ws.onopen = () => {
+                console.log('Connected to signaling server');
+                ws.send(JSON.stringify({ type: 'join', room: roomId }));
+                updateStatus('Waiting for peer...', 'connecting');
+            };
 
-            peer.on('connection', (connection) => {
-                conn = connection;
-                setupConnection();
-                updateStatus('Peer connected', 'connected');
-            });
+            ws.onmessage = async (event) => {
+                const message = JSON.parse(event.data);
+                console.log('Received message:', message.type);
 
-            peer.on('call', (call) => {
-                if (currentCall) {
-                    currentCall.close();
+                switch (message.type) {
+                    case 'peer-joined':
+                        updateStatus('Peer found! Connecting...', 'connecting');
+                        await createOffer();
+                        break;
+                    
+                    case 'offer':
+                        await handleOffer(message.offer);
+                        break;
+                    
+                    case 'answer':
+                        await handleAnswer(message.answer);
+                        break;
+                    
+                    case 'ice-candidate':
+                        await handleIceCandidate(message.candidate);
+                        break;
+                    
+                    case 'peer-left':
+                        updateStatus('Peer disconnected', 'disconnected');
+                        closePeerConnection();
+                        break;
+
+                    case 'talking':
+                        audioIndicator.textContent = '🔊 Peer is talking...';
+                        audioIndicator.className = 'audio-indicator active';
+                        break;
+                    
+                    case 'stopped':
+                        audioIndicator.textContent = '';
+                        audioIndicator.className = 'audio-indicator';
+                        break;
                 }
-                
-                // Answer with muted stream initially
-                const mutedStream = createMutedStream();
-                call.answer(mutedStream);
-                
-                call.on('stream', (remoteStream) => {
-                    playRemoteStream(remoteStream);
-                });
+            };
 
-                call.on('close', () => {
-                    stopRemoteStream();
-                });
-
-                currentCall = call;
-            });
-
-            peer.on('error', (err) => {
-                console.error('Peer error:', err);
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
                 updateStatus('Connection error', 'disconnected');
-            });
-        }
+            };
 
-        function createMutedStream() {
-            if (!localStream) return null;
-            const mutedStream = localStream.clone();
-            mutedStream.getAudioTracks().forEach(track => track.enabled = false);
-            return mutedStream;
-        }
-
-        function connectToRoom() {
-            const targetPeerId = roomId + '-' + (myPeerId.includes(roomId) ? '2' : '1');
-            
-            conn = peer.connect(targetPeerId);
-            setupConnection();
-        }
-
-        function setupConnection() {
-            conn.on('open', () => {
-                updateStatus('Connected - Ready to talk!', 'connected');
-            });
-
-            conn.on('data', (data) => {
-                if (data.type === 'talking') {
-                    audioIndicator.textContent = '🔊 Peer is talking...';
-                    audioIndicator.className = 'audio-indicator active';
-                } else if (data.type === 'stopped') {
-                    audioIndicator.textContent = '';
-                    audioIndicator.className = 'audio-indicator';
+            ws.onclose = () => {
+                console.log('Disconnected from signaling server');
+                if (statusEl.classList.contains('connected') || statusEl.classList.contains('connecting')) {
+                    updateStatus('Disconnected', 'disconnected');
                 }
-            });
+            };
+        }
 
-            conn.on('close', () => {
-                updateStatus('Peer disconnected', 'disconnected');
-            });
+        function createPeerConnection() {
+            peerConnection = new RTCPeerConnection(rtcConfig);
+
+            // Add local stream
+            if (localStream) {
+                localStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, localStream);
+                });
+            }
+
+            // Handle incoming tracks
+            peerConnection.ontrack = (event) => {
+                console.log('Received remote track');
+                playRemoteStream(event.streams[0]);
+            };
+
+            // Handle ICE candidates
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'ice-candidate',
+                        room: roomId,
+                        candidate: event.candidate
+                    }));
+                }
+            };
+
+            // Connection state changes
+            peerConnection.onconnectionstatechange = () => {
+                console.log('Connection state:', peerConnection.connectionState);
+                if (peerConnection.connectionState === 'connected') {
+                    updateStatus('Connected - Ready to talk!', 'connected');
+                } else if (peerConnection.connectionState === 'disconnected' || 
+                           peerConnection.connectionState === 'failed') {
+                    updateStatus('Connection lost', 'disconnected');
+                }
+            };
+
+            return peerConnection;
+        }
+
+        async function createOffer() {
+            createPeerConnection();
+            
+            try {
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                
+                ws.send(JSON.stringify({
+                    type: 'offer',
+                    room: roomId,
+                    offer: offer
+                }));
+            } catch (err) {
+                console.error('Error creating offer:', err);
+            }
+        }
+
+        async function handleOffer(offer) {
+            createPeerConnection();
+            
+            try {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                
+                ws.send(JSON.stringify({
+                    type: 'answer',
+                    room: roomId,
+                    answer: answer
+                }));
+            } catch (err) {
+                console.error('Error handling offer:', err);
+            }
+        }
+
+        async function handleAnswer(answer) {
+            try {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+            } catch (err) {
+                console.error('Error handling answer:', err);
+            }
+        }
+
+        async function handleIceCandidate(candidate) {
+            try {
+                if (peerConnection) {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                }
+            } catch (err) {
+                console.error('Error adding ICE candidate:', err);
+            }
+        }
+
+        function playRemoteStream(stream) {
+            if (!remoteAudio) {
+                remoteAudio = document.createElement('audio');
+                remoteAudio.autoplay = true;
+                remoteAudio.id = 'remoteAudio';
+                document.body.appendChild(remoteAudio);
+            }
+            remoteAudio.srcObject = stream;
         }
 
         async function joinRoom() {
@@ -349,53 +471,12 @@
                 return;
             }
 
-            updateStatus('Connecting to room...', 'connecting');
-            
-            // Use room-based peer IDs
-            peer = new Peer(roomId + '-' + Date.now());
-            
-            peer.on('open', (id) => {
-                myPeerId = id;
-                console.log('Joined as:', id);
-                
-                // Try to connect to other peer
-                setTimeout(() => {
-                    const otherPeers = [roomId + '-1', roomId + '-2'];
-                    otherPeers.forEach(peerId => {
-                        if (peerId !== myPeerId) {
-                            const connection = peer.connect(peerId);
-                            if (connection) {
-                                conn = connection;
-                                setupConnection();
-                            }
-                        }
-                    });
-                }, 1000);
+            updateStatus('Connecting to server...', 'connecting');
+            connectToSignalingServer();
 
-                updateStatus('Waiting for peer...', 'connecting');
-                roomSection.style.display = 'none';
-                talkBtn.classList.add('show');
-                leaveBtn.classList.add('show');
-            });
-
-            peer.on('connection', (connection) => {
-                conn = connection;
-                setupConnection();
-                updateStatus('Connected - Ready to talk!', 'connected');
-            });
-
-            peer.on('call', (call) => {
-                if (currentCall) currentCall.close();
-                
-                const mutedStream = createMutedStream();
-                call.answer(mutedStream);
-                
-                call.on('stream', (remoteStream) => {
-                    playRemoteStream(remoteStream);
-                });
-
-                currentCall = call;
-            });
+            roomSection.style.display = 'none';
+            talkBtn.classList.add('show');
+            leaveBtn.classList.add('show');
         }
 
         function startTalking() {
@@ -409,18 +490,9 @@
             // Enable audio track
             localStream.getAudioTracks().forEach(track => track.enabled = true);
 
-            // Send talking status to peer
-            if (conn && conn.open) {
-                conn.send({ type: 'talking' });
-            }
-
-            // Start or update call with unmuted stream
-            if (conn && conn.open) {
-                const peerIds = Object.keys(peer.connections);
-                peerIds.forEach(peerId => {
-                    if (currentCall) currentCall.close();
-                    currentCall = peer.call(peerId, localStream);
-                });
+            // Notify peer
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'talking', room: roomId }));
             }
         }
 
@@ -432,70 +504,67 @@
             audioIndicator.textContent = '';
             audioIndicator.className = 'audio-indicator';
 
-            // Mute audio track
+            // Disable audio track
             if (localStream) {
                 localStream.getAudioTracks().forEach(track => track.enabled = false);
             }
 
-            // Send stopped status to peer
-            if (conn && conn.open) {
-                conn.send({ type: 'stopped' });
+            // Notify peer
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'stopped', room: roomId }));
             }
         }
 
-        function playRemoteStream(stream) {
-            const audio = document.createElement('audio');
-            audio.srcObject = stream;
-            audio.autoplay = true;
-            audio.id = 'remoteAudio';
-            
-            const existing = document.getElementById('remoteAudio');
-            if (existing) existing.remove();
-            
-            document.body.appendChild(audio);
-        }
-
-        function stopRemoteStream() {
-            const audio = document.getElementById('remoteAudio');
-            if (audio) audio.remove();
+        function closePeerConnection() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
         }
 
         function leaveRoom() {
-            if (currentCall) currentCall.close();
-            if (conn) conn.close();
-            if (peer) peer.destroy();
+            if (ws) {
+                ws.send(JSON.stringify({ type: 'leave', room: roomId }));
+                ws.close();
+                ws = null;
+            }
+
+            closePeerConnection();
+
             if (localStream) {
                 localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
             }
-            
-            stopRemoteStream();
-            
+
+            if (remoteAudio) {
+                remoteAudio.srcObject = null;
+                remoteAudio.remove();
+                remoteAudio = null;
+            }
+
             roomSection.style.display = 'block';
             talkBtn.classList.remove('show', 'active');
             leaveBtn.classList.remove('show');
             joinBtn.disabled = false;
             audioIndicator.textContent = '';
-            updateStatus('Disconnected', 'disconnected');
-            
-            peer = null;
-            conn = null;
-            localStream = null;
-            currentCall = null;
             isTalking = false;
+            updateStatus('Disconnected', 'disconnected');
         }
 
         // Event listeners
         joinBtn.addEventListener('click', joinRoom);
         leaveBtn.addEventListener('click', leaveRoom);
 
-        // Touch and mouse events for talk button
+        // Talk button events
         talkBtn.addEventListener('mousedown', startTalking);
         talkBtn.addEventListener('mouseup', stopTalking);
         talkBtn.addEventListener('mouseleave', stopTalking);
+        
         talkBtn.addEventListener('touchstart', (e) => {
             e.preventDefault();
             startTalking();
         });
+        
         talkBtn.addEventListener('touchend', (e) => {
             e.preventDefault();
             stopTalking();
