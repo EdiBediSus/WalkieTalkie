@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Walkie Talkie</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            max-width: 400px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+
+        h1 {
+            text-align: center;
+            color: #667eea;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+
+        .status {
+            text-align: center;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .status.disconnected {
+            background: #fee;
+            color: #c33;
+        }
+
+        .status.connecting {
+            background: #ffeaa7;
+            color: #d63031;
+        }
+
+        .status.connected {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+
+        .room-section {
+            margin-bottom: 25px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 600;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border 0.3s;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 10px;
+        }
+
+        .join-btn {
+            background: #667eea;
+            color: white;
+        }
+
+        .join-btn:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .join-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .talk-btn {
+            background: #e74c3c;
+            color: white;
+            font-size: 20px;
+            padding: 60px;
+            border-radius: 50%;
+            width: 180px;
+            height: 180px;
+            margin: 30px auto;
+            display: none;
+            position: relative;
+        }
+
+        .talk-btn.active {
+            background: #c0392b;
+            box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.7);
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.7);
+            }
+            70% {
+                box-shadow: 0 0 0 30px rgba(231, 76, 60, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(231, 76, 60, 0);
+            }
+        }
+
+        .talk-btn.show {
+            display: block;
+        }
+
+        .leave-btn {
+            background: #95a5a6;
+            color: white;
+            display: none;
+        }
+
+        .leave-btn.show {
+            display: block;
+        }
+
+        .leave-btn:hover {
+            background: #7f8c8d;
+        }
+
+        .instructions {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 20px;
+            font-size: 14px;
+            color: #666;
+            line-height: 1.6;
+        }
+
+        .audio-indicator {
+            text-align: center;
+            margin-top: 15px;
+            font-size: 14px;
+            color: #666;
+            min-height: 20px;
+        }
+
+        .audio-indicator.active {
+            color: #e74c3c;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📻 Walkie Talkie</h1>
+        
+        <div class="status disconnected" id="status">Disconnected</div>
+        
+        <div class="room-section" id="roomSection">
+            <label for="roomId">Room Code:</label>
+            <input type="text" id="roomId" placeholder="Enter room code (e.g., room123)" value="room123">
+            <button class="join-btn" id="joinBtn">Join Room</button>
+        </div>
+
+        <button class="talk-btn" id="talkBtn">
+            PRESS TO<br>TALK
+        </button>
+
+        <div class="audio-indicator" id="audioIndicator"></div>
+
+        <button class="leave-btn" id="leaveBtn">Leave Room</button>
+
+        <div class="instructions">
+            <strong>How to use:</strong><br>
+            1. Enter the same room code on both devices<br>
+            2. Press and hold the button to talk<br>
+            3. Release to listen<br>
+            4. Make sure microphone permission is granted
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js"></script>
+    <script>
+        const statusEl = document.getElementById('status');
+        const roomSection = document.getElementById('roomSection');
+        const roomIdInput = document.getElementById('roomId');
+        const joinBtn = document.getElementById('joinBtn');
+        const talkBtn = document.getElementById('talkBtn');
+        const leaveBtn = document.getElementById('leaveBtn');
+        const audioIndicator = document.getElementById('audioIndicator');
+
+        let peer = null;
+        let conn = null;
+        let localStream = null;
+        let currentCall = null;
+        let isTalking = false;
+        let roomId = '';
+        let myPeerId = '';
+
+        function updateStatus(msg, type) {
+            statusEl.textContent = msg;
+            statusEl.className = 'status ' + type;
+        }
+
+        async function initMicrophone() {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }, 
+                    video: false 
+                });
+                return true;
+            } catch (err) {
+                alert('Microphone access denied! Please allow microphone access.');
+                return false;
+            }
+        }
+
+        function initPeer() {
+            peer = new Peer();
+
+            peer.on('open', (id) => {
+                myPeerId = id;
+                console.log('My peer ID:', id);
+                connectToRoom();
+            });
+
+            peer.on('connection', (connection) => {
+                conn = connection;
+                setupConnection();
+                updateStatus('Peer connected', 'connected');
+            });
+
+            peer.on('call', (call) => {
+                if (currentCall) {
+                    currentCall.close();
+                }
+                
+                // Answer with muted stream initially
+                const mutedStream = createMutedStream();
+                call.answer(mutedStream);
+                
+                call.on('stream', (remoteStream) => {
+                    playRemoteStream(remoteStream);
+                });
+
+                call.on('close', () => {
+                    stopRemoteStream();
+                });
+
+                currentCall = call;
+            });
+
+            peer.on('error', (err) => {
+                console.error('Peer error:', err);
+                updateStatus('Connection error', 'disconnected');
+            });
+        }
+
+        function createMutedStream() {
+            if (!localStream) return null;
+            const mutedStream = localStream.clone();
+            mutedStream.getAudioTracks().forEach(track => track.enabled = false);
+            return mutedStream;
+        }
+
+        function connectToRoom() {
+            const targetPeerId = roomId + '-' + (myPeerId.includes(roomId) ? '2' : '1');
+            
+            conn = peer.connect(targetPeerId);
+            setupConnection();
+        }
+
+        function setupConnection() {
+            conn.on('open', () => {
+                updateStatus('Connected - Ready to talk!', 'connected');
+            });
+
+            conn.on('data', (data) => {
+                if (data.type === 'talking') {
+                    audioIndicator.textContent = '🔊 Peer is talking...';
+                    audioIndicator.className = 'audio-indicator active';
+                } else if (data.type === 'stopped') {
+                    audioIndicator.textContent = '';
+                    audioIndicator.className = 'audio-indicator';
+                }
+            });
+
+            conn.on('close', () => {
+                updateStatus('Peer disconnected', 'disconnected');
+            });
+        }
+
+        async function joinRoom() {
+            roomId = roomIdInput.value.trim();
+            if (!roomId) {
+                alert('Please enter a room code');
+                return;
+            }
+
+            joinBtn.disabled = true;
+            updateStatus('Requesting microphone...', 'connecting');
+
+            const micGranted = await initMicrophone();
+            if (!micGranted) {
+                joinBtn.disabled = false;
+                updateStatus('Disconnected', 'disconnected');
+                return;
+            }
+
+            updateStatus('Connecting to room...', 'connecting');
+            
+            // Use room-based peer IDs
+            peer = new Peer(roomId + '-' + Date.now());
+            
+            peer.on('open', (id) => {
+                myPeerId = id;
+                console.log('Joined as:', id);
+                
+                // Try to connect to other peer
+                setTimeout(() => {
+                    const otherPeers = [roomId + '-1', roomId + '-2'];
+                    otherPeers.forEach(peerId => {
+                        if (peerId !== myPeerId) {
+                            const connection = peer.connect(peerId);
+                            if (connection) {
+                                conn = connection;
+                                setupConnection();
+                            }
+                        }
+                    });
+                }, 1000);
+
+                updateStatus('Waiting for peer...', 'connecting');
+                roomSection.style.display = 'none';
+                talkBtn.classList.add('show');
+                leaveBtn.classList.add('show');
+            });
+
+            peer.on('connection', (connection) => {
+                conn = connection;
+                setupConnection();
+                updateStatus('Connected - Ready to talk!', 'connected');
+            });
+
+            peer.on('call', (call) => {
+                if (currentCall) currentCall.close();
+                
+                const mutedStream = createMutedStream();
+                call.answer(mutedStream);
+                
+                call.on('stream', (remoteStream) => {
+                    playRemoteStream(remoteStream);
+                });
+
+                currentCall = call;
+            });
+        }
+
+        function startTalking() {
+            if (!localStream || isTalking) return;
+            
+            isTalking = true;
+            talkBtn.classList.add('active');
+            audioIndicator.textContent = '🎤 You are talking...';
+            audioIndicator.className = 'audio-indicator active';
+
+            // Enable audio track
+            localStream.getAudioTracks().forEach(track => track.enabled = true);
+
+            // Send talking status to peer
+            if (conn && conn.open) {
+                conn.send({ type: 'talking' });
+            }
+
+            // Start or update call with unmuted stream
+            if (conn && conn.open) {
+                const peerIds = Object.keys(peer.connections);
+                peerIds.forEach(peerId => {
+                    if (currentCall) currentCall.close();
+                    currentCall = peer.call(peerId, localStream);
+                });
+            }
+        }
+
+        function stopTalking() {
+            if (!isTalking) return;
+            
+            isTalking = false;
+            talkBtn.classList.remove('active');
+            audioIndicator.textContent = '';
+            audioIndicator.className = 'audio-indicator';
+
+            // Mute audio track
+            if (localStream) {
+                localStream.getAudioTracks().forEach(track => track.enabled = false);
+            }
+
+            // Send stopped status to peer
+            if (conn && conn.open) {
+                conn.send({ type: 'stopped' });
+            }
+        }
+
+        function playRemoteStream(stream) {
+            const audio = document.createElement('audio');
+            audio.srcObject = stream;
+            audio.autoplay = true;
+            audio.id = 'remoteAudio';
+            
+            const existing = document.getElementById('remoteAudio');
+            if (existing) existing.remove();
+            
+            document.body.appendChild(audio);
+        }
+
+        function stopRemoteStream() {
+            const audio = document.getElementById('remoteAudio');
+            if (audio) audio.remove();
+        }
+
+        function leaveRoom() {
+            if (currentCall) currentCall.close();
+            if (conn) conn.close();
+            if (peer) peer.destroy();
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            
+            stopRemoteStream();
+            
+            roomSection.style.display = 'block';
+            talkBtn.classList.remove('show', 'active');
+            leaveBtn.classList.remove('show');
+            joinBtn.disabled = false;
+            audioIndicator.textContent = '';
+            updateStatus('Disconnected', 'disconnected');
+            
+            peer = null;
+            conn = null;
+            localStream = null;
+            currentCall = null;
+            isTalking = false;
+        }
+
+        // Event listeners
+        joinBtn.addEventListener('click', joinRoom);
+        leaveBtn.addEventListener('click', leaveRoom);
+
+        // Touch and mouse events for talk button
+        talkBtn.addEventListener('mousedown', startTalking);
+        talkBtn.addEventListener('mouseup', stopTalking);
+        talkBtn.addEventListener('mouseleave', stopTalking);
+        talkBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            startTalking();
+        });
+        talkBtn.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            stopTalking();
+        });
+    </script>
+</body>
+</html>
